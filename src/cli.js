@@ -54,16 +54,21 @@ async function begin() {
   const help = argv['help'];
   const headless = argv['headless'];
   const taskFile = params[0];
-  let scriptName = (taskFile.match(/(.*)\.js$/) || {})[1];
-
-  // Use ./output/{scriptName} as default output folder.
-  const outputPath = argv['output'] || `./output/${scriptName.replace(/\//ig, '|')}`;
 
   if (help) {
     printUsage();
     process.exit();
   }
-  if (!params || !taskFile || !scriptName) {
+  if (!params || !taskFile) {
+    printShortUsage();
+    process.exit();
+  }
+
+  // Use ./output/{scriptName} as default output folder.
+  let scriptName = (taskFile.match(/(.*)\.js$/) || {})[1];
+  const outputPath = argv['output'] || `./output/${scriptName.replace(/\//ig, '|')}`;
+
+  if (!scriptName) {
     printShortUsage();
     process.exit();
   }

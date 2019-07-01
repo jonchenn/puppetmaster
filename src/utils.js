@@ -9,6 +9,8 @@
  *
  *   // Find the target element insides nested shadow doms.
  *   querySelectorShadowDom('body webcomponent::shadowRoot another-component::shadowRoot target-el');
+ *
+ * For extending prototypes in Browser
  */
 const querySelectorShadowDom = function(rootElement, selectors) {
   if (typeof(selectors) !== 'string') {
@@ -31,13 +33,15 @@ const querySelectorShadowDom = function(rootElement, selectors) {
   return currentElement;
 };
 
-Element.prototype.querySelectorShadowDom = function(selectors) {
-  return querySelectorShadowDom(this, selectors);
-};
+const extendPrototypes = function() {
+  Element.prototype.querySelectorShadowDom = function(selectors) {
+    return querySelectorShadowDom(this, selectors);
+  };
 
-Document.prototype.querySelectorShadowDom = function(selectors) {
-  return querySelectorShadowDom(this, selectors);
-};
+  Document.prototype.querySelectorShadowDom = function(selectors) {
+    return querySelectorShadowDom(this, selectors);
+  };
+}
 
 module.exports = {
   querySelectorShadowDom,
