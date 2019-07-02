@@ -44,5 +44,5 @@ const extendPrototypes = function() {
 }
 
 module.exports = {
-  querySelectorShadowDom,
+  'querySelectorShadowDom': querySelectorShadowDom,
 };

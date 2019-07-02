@@ -72,60 +72,56 @@ async function outputHtmlToFile(filename, content) {
 }
 
 async function runTask(task, options) {
+  assert(task, 'Missing task');
+
+  let visits = task.visits || 1;
+  runFlow(task.flows[0], options);
+}
+
+async function runFlow(flow, options) {
   let error = null;
   let browser, page, content;
   let outputPath = options.outputPath;
-  let device = task.device || 'Pixel 2'
+  let device = flow.device || 'Pixel 2'
   let waitOptions = {
     waitUntil: ['load', 'networkidle0'],
   };
 
   // Default sleep between steps: 1 second.
-  let sleepAfterEachAction = task.sleepAfterEachAction || 1000;
-  let sleepAfterEachStep = task.sleepAfterEachStep || 1000;
+  let sleepAfterEachAction = flow.sleepAfterEachAction || 1000;
+  let sleepAfterEachStep = flow.sleepAfterEachStep || 1000;
 
   logs = [];
 
   try {
-    assert(task.browser, 'Missing browser in task.');
-    assert(task.steps, 'Missing steps in task.');
+    assert(flow.browser, 'Missing browser in flow.');
+    assert(flow.steps, 'Missing steps in flow.');
     logger('info', `Use device ${device}`);
 
     // Init puppeteer.
     browser = await puppeteer.launch({
       headless: options.isHeadless,
-      args: [`--window-size=${task.windowWidth},${task.windowHeight}`],
+      args: [`--window-size=${flow.windowWidth},${flow.windowHeight}`],
     });
     page = await browser.newPage();
     await page.emulate(devices[device]);
-    if (task.showConsoleOutput) {
+    if (flow.showConsoleOutput) {
       page.on('console',
           msg => logger('console', `\tPage console output: ${msg.text()}`));
     }
 
     // Override user agent.
-    if (task.userAgent) {
-      page.setUserAgent(task.userAgent);
+    if (flow.userAgent) {
+      page.setUserAgent(flow.userAgent);
     }
-
-    // Extend Document and Eelemnt prototypes with querySelectorShadowDom.
-    page.evaluate(() => {
-      Element.prototype.querySelectorShadowDom = function(selectors) {
-        return utils.querySelectorShadowDom(this, selectors);
-      };
-
-      Document.prototype.querySelectorShadowDom = function(selectors) {
-        return utils.querySelectorShadowDom(this, selectors);
-      };
-    }, utils);
 
     // Create a dummy file for the path.
     let filePath = path.resolve(`${outputPath}/.dummy.txt`);
     await fse.outputFile(filePath, '');
 
     // Execute steps.
-    for (var i = 0; i < task.steps.length; i++) {
-      let step = task.steps[i];
+    for (var i = 0; i < flow.steps.length; i++) {
+      let step = flow.steps[i];
       let stepLog = `Step ${i+1}`;
       if (step.log) stepLog += `: ${step.log}`;
       logger('step', stepLog);
@@ -144,6 +140,20 @@ async function runTask(task, options) {
         // Get page instance for current document or iframe.
         let pageObj = getPageObject(page, action);
         let el;
+
+        // Extend Document and Eelemnt prototypes with querySelectorShadowDom.
+        await pageObj.evaluate(utils => {
+          Element.prototype.querySelectorShadowDom = function(selectors) {
+            return utils.querySelectorShadowDom(this, selectors);
+          };
+
+          Document.prototype.querySelectorShadowDom = function(selectors) {
+            return utils.querySelectorShadowDom(this, selectors);
+          };
+        }, utils);
+
+        // Print console log inside puppeteer.evaluate().
+        pageObj.on('console', consoleObj => console.log(consoleObj.text()));
 
         if (step.actions) {
           logger('action', `    action ${i+1}-${actionNumber}: ${action.actionType}`);
@@ -218,7 +228,7 @@ async function runTask(task, options) {
               if (action.contentRegex && !action.contentRegex.match(pageTitle)) {
                 throw new Error(`Page title "${pageTitle}" doesn't match ${action.contentRegex}`);
               }
-              message = `Page title "${pageTitle}" matches ${action.contentRegex}`;
+              message = `Page title "${pageTitle}" matches "${action.contentRegex || action.content}"`;
             }
             break;
 
@@ -241,16 +251,19 @@ async function runTask(task, options) {
             break;
 
           case ActionType.ASSERT_EXIST:
-            el = await pageObj.evaluate(() => {
-              document.querySelectorShadowDom(action.selector);
-            }, action);
-            if (!el) throw new Error(`Unable to find ${action.selector}`);
+            {
+              let el = await pageObj.evaluate((action) => {
+                console.log(action.selector);
+                document.querySelectorShadowDom(action.selector);
+              }, action);
+              if (!el) throw new Error(`Unable to find ${action.selector}`);
+            }
             break;
 
           case ActionType.ASSERT_CONTENT:
             {
               let content = action.content;
-              let bodyContent = await page.evaluate(
+              let bodyContent = await pageObj.evaluate(
                   () => document.querySelector('body').innerText);
               if (bodyContent.indexOf(content) < 0 && bodyContent.indexOf(escapeXml(content))) {
                 throw new Error(`Didn\'t see text \"${content}\"`);
@@ -275,7 +288,7 @@ async function runTask(task, options) {
 
           case ActionType.CUSTOM_FUNC:
             if (action.customFunc) {
-              await action.customFunc(action, page);
+              await action.customFunc(action, pageObj);
             }
             break;
 
@@ -295,7 +308,7 @@ async function runTask(task, options) {
       });
 
       // Output to file.
-      if (task.outputHtmlToFile) {
+      if (flow.outputHtmlToFile) {
         await outputHtmlToFile(
           `${outputPath}/output-step-${i+1}.html`,
           await page.content());

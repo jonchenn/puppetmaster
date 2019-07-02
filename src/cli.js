@@ -88,6 +88,7 @@ async function begin() {
       task = require(`../${scriptName}`);
     } catch (e) {
       console.log(`Unable to load task script: ${taskFile}`.red);
+      console.error(e);
       return;
     }
 
