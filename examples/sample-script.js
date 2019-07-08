@@ -1,9 +1,9 @@
-const puppeteerTask = require('../src/core');
-const ActionType = puppeteerTask.ActionType;
+const PuppetMaster = require('../src/core');
+const ActionType = PuppetMaster.ActionType;
 
 let task = {
-  isHeadless: false,
-  browser: 'chrome',
+  visits: 2, // Total number of simulated visits.
+  isHeadless: true,
   device: 'Pixel 2',
   windowWidth: 450,
   windowHeight: 900,
@@ -13,35 +13,54 @@ let task = {
   stopWhenFail: true,
   showConsoleOutput: false,
   userAgent: 'fake-useragent',
-  steps: [{
-    log: 'Go to sample eCommerce site',
-    actions: [{
-      actionType: ActionType.URL,
-      url: 'http://jonchen-shop.firebaseapp.com',
+  flows: [{
+    name: 'Add a product to cart',
+    percentage: 0.5, // 50% of users
+    steps: [{
+      log: 'Go to sample eCommerce site',
+      actions: [{
+        actionType: ActionType.URL,
+        url: 'http://jonchen-shop.firebaseapp.com',
+      }, {
+        actionType: ActionType.SLEEP,
+        value: 1000,
+      }]
+    }, {
+      actionType: ActionType.CLICK,
+      selector: 'shop-app::shadowRoot shop-home::shadowRoot :nth-child(4) > shop-button',
+    }, {
+      actionType: ActionType.CLICK,
+      selector: 'shop-app::shadowRoot shop-list::shadowRoot ul > li:nth-child(1)',
+    }, {
+      actionType: ActionType.CLICK,
+      selector: 'shop-app::shadowRoot shop-detail::shadowRoot #content shop-button > button',
+    }, {
+      actionType: ActionType.CLICK,
+      selector: 'shop-app::shadowRoot shop-cart-modal::shadowRoot #viewCartAnchor',
     }, {
       actionType: ActionType.ASSERT_PAGE_TITLE,
-      content: 'Shrine',
-    }]
+      content: 'Your cart - SHOP',
+    }],
   }, {
-    actionType: ActionType.SCROLL_TO,
-    content: 'Sunglasses',
-  }, {
-    actionType: ActionType.SCROLL_TO,
-    selector: '.category-card-wrapper',
-    content: 'Beachball',
-  }, {
-    actionType: ActionType.CLICK,
-    content: 'Sunglasses',
-  }, {
-    actionType: ActionType.ASSERT_CONTENT,
-    content: 'Be an optimist.',
-  }, {
-    actionType: ActionType.CLICK,
-    content: 'Quantity 1',
-  }, {
-    actionType: ActionType.CLICK,
-    content: 'Quantity 5',
+    name: 'Navigate to PDP',
+    percentage: 0.5, // 50% of users
+    steps: [{
+      log: 'Go to sample eCommerce site',
+      actions: [{
+        actionType: ActionType.URL,
+        url: 'http://jonchen-shop.firebaseapp.com',
+      }, {
+        actionType: ActionType.SLEEP,
+        value: 1000,
+      }]
+    }, {
+      actionType: ActionType.CLICK,
+      selector: 'shop-app::shadowRoot shop-home::shadowRoot :nth-child(4) > shop-button',
+    }, {
+      actionType: ActionType.CLICK,
+      selector: 'shop-app::shadowRoot shop-list::shadowRoot ul > li:nth-child(1)',
+    }],
   }],
-};
+}
 
 module.exports = task;

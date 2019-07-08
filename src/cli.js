@@ -4,6 +4,7 @@ const argv = require('minimist')(process.argv.slice(2));
 const path = require('path');
 const fse = require('fs-extra');
 const mkdirp = require('mkdirp');
+const rimraf = require('rimraf');
 const puppemaster = require('./core');
 const colors = require('colors');
 
@@ -80,6 +81,10 @@ async function begin() {
     mkdirp(`./${outputPath}/`, (err) => {
       if (err) throw new Error(`Unable to create directory ${err}`);
     });
+    rimraf(`./${outputPath}/*`, () => {
+      console.log(`Removed previous output in ./${outputPath}`.dim);
+    });
+
 
     console.log(`Loading task ${taskFile}`.cyan);
 

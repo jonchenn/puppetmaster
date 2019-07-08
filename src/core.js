@@ -5,6 +5,7 @@ const path = require('path');
 const beautify = require('js-beautify').html;
 const colors = require('colors');
 const assert = require('assert');
+const shuffle = require('shuffle-array');
 const {
   JSDOM
 } = require("jsdom");
@@ -73,44 +74,66 @@ async function runTask(task, options) {
   assert(task, 'Missing task');
 
   let visits = task.visits || 1;
-  await runFlow(task.flows[0], options);
+  let percentages = task.flows.map(flow => flow.percentage);
+  let denominator = percentages.reduce((a, b) => a + b);
+  let flowSeries = [];
+
+  Object.keys(task).forEach(key => {
+    if (key !== 'flows') options[key] = task[key];
+  });
+
+  console.log(options);
+
+  for (let i=0; i<task.flows.length; i++) {
+    numFlow = Math.round(visits * task.flows[i].percentage / denominator);
+    for (let j=0; j<numFlow; j++) {
+      flowSeries.push(i);
+    }
+  }
+  shuffle(flowSeries);
+
+  for (let k=0; k<visits; k++) {
+    console.log(`Running flow ${k}...`.cyan);
+    await runFlow(task.flows[flowSeries[k]], {
+      flowNumber: k,
+    }, options);
+  }
 }
 
-async function runFlow(flow, options) {
+async function runFlow(flow, context, options) {
   let error = null;
   let browser, page, content;
   let outputPath = options.outputPath;
-  let device = flow.device || 'Pixel 2'
+  let device = options.device || 'Pixel 2'
   let waitOptions = {
     waitUntil: ['load', options.networkidle || 'networkidle0'],
   };
 
   // Default sleep between steps: 1 second.
-  let sleepAfterEachAction = flow.sleepAfterEachAction || 1000;
-  let sleepAfterEachStep = flow.sleepAfterEachStep || 1000;
+  let sleepAfterEachAction = options.sleepAfterEachAction || 1000;
+  let sleepAfterEachStep = options.sleepAfterEachStep || 1000;
 
   logs = [];
 
   try {
-    assert(flow.browser, 'Missing browser in flow.');
     assert(flow.steps, 'Missing steps in flow.');
     logger('info', `Use device ${device}`);
 
     // Init puppeteer.
     browser = await puppeteer.launch({
       headless: options.isHeadless,
-      args: [`--window-size=${flow.windowWidth},${flow.windowHeight}`],
+      args: [`--window-size=${options.windowWidth},${options.windowHeight}`],
     });
     page = await browser.newPage();
     await page.emulate(devices[device]);
-    if (flow.showConsoleOutput) {
+    if (options.showConsoleOutput) {
       page.on('console',
           msg => logger('console', `\tPage console output: ${msg.text()}`));
     }
 
     // Override user agent.
-    if (flow.userAgent) {
-      page.setUserAgent(flow.userAgent);
+    if (options.userAgent) {
+      page.setUserAgent(options.userAgent);
     }
 
     // Print console log inside puppeteer.evaluate().
@@ -122,7 +145,7 @@ async function runFlow(flow, options) {
     });
 
     // Create a dummy file for the path.
-    let filePath = path.resolve(`${outputPath}/.dummy.txt`);
+    let filePath = path.resolve(`${outputPath}/flow-${context.flowNumber}/result.json`);
     await fse.outputFile(filePath, '');
 
     // Execute steps.
@@ -161,7 +184,7 @@ async function runFlow(flow, options) {
 
           case ActionType.SLEEP:
             await pageObj.waitFor(parseInt(action.value));
-            message = `Waited for ${action.value} seconds`;
+            message = `Waited for ${action.value} ms`;
             break;
 
           case ActionType.WAIT_FOR_ELEMENT:
@@ -214,7 +237,7 @@ async function runFlow(flow, options) {
               if (action.contentRegex && !action.contentRegex.match(pageTitle)) {
                 throw new Error(`Page title "${pageTitle}" doesn't match ${action.contentRegex}`);
               }
-              message = `Page title "${pageTitle}" matches "${action.contentRegex || action.content}"`;
+              message = `Page title matched: "${pageTitle}"`;
             }
             break;
 
@@ -264,7 +287,7 @@ async function runFlow(flow, options) {
           case ActionType.WRITE_TO_FILE:
             content = await pageObj.$eval(action.selector, el => el.outerHTML);
             await outputHtmlToFile(
-              `${outputPath}/${action.filename}`, content);
+              `${outputPath}/flow-${context.flowNumber}/${action.filename}`, content);
             message = `write ${action.selector} to ${action.filename}`;
             break;
 
@@ -286,13 +309,13 @@ async function runFlow(flow, options) {
 
       await page.waitFor(sleepAfterEachStep);
       await page.screenshot({
-        path: `${outputPath}/step-${i+1}.png`
+        path: `${outputPath}/flow-${context.flowNumber}/step-${i+1}.png`
       });
 
       // Output to file.
       if (flow.outputHtmlToFile) {
         await outputHtmlToFile(
-          `${outputPath}/output-step-${i+1}.html`,
+          `${outputPath}/flow-${context.flowNumber}/output-step-${i+1}.html`,
           await page.content());
       }
     }
@@ -303,10 +326,10 @@ async function runFlow(flow, options) {
   } finally {
     if (page) {
       await page.screenshot({
-        path: `${outputPath}/step-final.png`
+        path: `${outputPath}/flow-${context.flowNumber}/step-final.png`
       });
       await outputHtmlToFile(
-        `${outputPath}/output-step-final.html`,
+        `${outputPath}/flow-${context.flowNumber}/output-step-final.html`,
         await page.content());
     }
 
