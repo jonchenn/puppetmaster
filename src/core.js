@@ -6,6 +6,7 @@ const beautify = require('js-beautify').html;
 const colors = require('colors');
 const assert = require('assert');
 const shuffle = require('shuffle-array');
+const NETWORK_CONFIG = require('./network-config');
 const {
   JSDOM
 } = require("jsdom");
@@ -106,7 +107,7 @@ async function runFlow(flow, context, options) {
   let outputPath = options.outputPath;
   let device = options.device || 'Pixel 2'
   let waitOptions = {
-    waitUntil: ['load', options.networkidle || 'networkidle0'],
+    waitUntil: [options.networkidle || 'networkidle0', 'load'],
   };
 
   // Default sleep between steps: 1 second.
@@ -131,6 +132,17 @@ async function runFlow(flow, context, options) {
           msg => logger('console', `\tPage console output: ${msg.text()}`));
     }
 
+    // Create a dummy file for the path.
+    let filePath = path.resolve(`${outputPath}/flow-${context.flowNumber}/result.json`);
+    await fse.outputFile(filePath, '{}');
+
+    // Set Network speed.
+    // Connect to Chrome DevTools and set throttling property.
+    const devTools = await page.target().createCDPSession()
+    if (options.networkConfig) {
+      await devTools.send('Network.emulateNetworkConditions', options.networkConfig);
+    }
+
     // Override user agent.
     if (options.userAgent) {
       page.setUserAgent(options.userAgent);
@@ -143,10 +155,6 @@ async function runFlow(flow, context, options) {
     page.once('load', async () => {
       await page.addScriptTag({path: __dirname + '/script-querySelectorDeep.js'});
     });
-
-    // Create a dummy file for the path.
-    let filePath = path.resolve(`${outputPath}/flow-${context.flowNumber}/result.json`);
-    await fse.outputFile(filePath, '');
 
     // Execute steps.
     for (var i = 0; i < flow.steps.length; i++) {
@@ -325,6 +333,9 @@ async function runFlow(flow, context, options) {
 
   } finally {
     if (page) {
+      let filePath = path.resolve(`${outputPath}/flow-${context.flowNumber}/result.json`);
+      await fse.outputFile(filePath, '{}');
+
       await page.screenshot({
         path: `${outputPath}/flow-${context.flowNumber}/step-final.png`
       });

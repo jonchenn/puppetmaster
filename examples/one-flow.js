@@ -1,22 +1,24 @@
 const PuppetMaster = require('../src/core');
 const ActionType = PuppetMaster.ActionType;
+const NETWORK_CONFIG = require('../src/network-config');
 
 let task = {
   visits: 1, // Total number of simulated visits.
+  isHeadless: false,
+  browser: 'chrome',
+  device: 'Pixel 2',
+  windowWidth: 450,
+  windowHeight: 900,
+  sleepAfterEachStep: 500,
+  sleepAfterEachAction: 500,
+  outputHtmlToFile: true,
+  stopWhenFail: true,
+  showConsoleOutput: false,
+  userAgent: 'fake-useragent',
+  networkConfig: NETWORK_CONFIG.Regular2G,
   flows: [{
     name: 'Flow to a PDP at jonchen-shop.firebaseapp.com',
     percentage: 1, // 100% of users
-    isHeadless: false,
-    browser: 'chrome',
-    device: 'Pixel 2',
-    windowWidth: 450,
-    windowHeight: 900,
-    sleepAfterEachStep: 1000,
-    sleepAfterEachAction: 1000,
-    outputHtmlToFile: true,
-    stopWhenFail: true,
-    showConsoleOutput: false,
-    userAgent: 'fake-useragent',
     steps: [{
       log: 'Go to sample eCommerce site',
       actions: [{
@@ -24,7 +26,7 @@ let task = {
         url: 'http://jonchen-shop.firebaseapp.com',
       }, {
         actionType: ActionType.SLEEP,
-        value: 2000,
+        value: 5000,
       }, {
         actionType: ActionType.ASSERT_PAGE_TITLE,
         content: 'Home - SHOP',
@@ -36,9 +38,8 @@ let task = {
       actionType: ActionType.SCROLL_TO,
       selector: 'shop-app::shadowRoot shop-home::shadowRoot :nth-child(4) > shop-button',
     }, {
-      selector: 'shop-app::shadowRoot shop-home::shadowRoot :nth-child(4) > shop-button',
       actionType: ActionType.CLICK,
-      // content: 'Shop Now',
+      selector: 'shop-app::shadowRoot shop-home::shadowRoot :nth-child(4) > shop-button',
       sleepAfter: 2000,
     }, {
       actions: [{

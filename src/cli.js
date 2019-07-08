@@ -78,13 +78,12 @@ async function begin() {
     console.log(`PuppetMaster begins.`.cyan);
 
     // Create directory if it doesn't exist.
-    mkdirp(`./${outputPath}/`, (err) => {
-      if (err) throw new Error(`Unable to create directory ${err}`);
-    });
-    rimraf(`./${outputPath}/*`, () => {
+    await rimraf(`./${outputPath}/*`, () => {
       console.log(`Removed previous output in ./${outputPath}`.dim);
     });
-
+    await mkdirp(`./${outputPath}/`, (err) => {
+      if (err) throw new Error(`Unable to create directory ${err}`);
+    });
 
     console.log(`Loading task ${taskFile}`.cyan);
 
