@@ -9,13 +9,11 @@ const {
   JSDOM
 } = require("jsdom");
 
-const utils = require('./utils');
-
 const ActionType = {
   // Connect to a specific URL.
   URL: 'url',
   // Wait in seconds.
-  WAIT_SECONDS: 'waitSeconds',
+  SLEEP: 'sleep',
   // Wait for a specific element show up.
   WAIT_FOR_ELEMENT: 'waitForElement',
   // Type in an input element and submit the form.
@@ -75,7 +73,7 @@ async function runTask(task, options) {
   assert(task, 'Missing task');
 
   let visits = task.visits || 1;
-  runFlow(task.flows[0], options);
+  await runFlow(task.flows[0], options);
 }
 
 async function runFlow(flow, options) {
@@ -84,7 +82,7 @@ async function runFlow(flow, options) {
   let outputPath = options.outputPath;
   let device = flow.device || 'Pixel 2'
   let waitOptions = {
-    waitUntil: ['load', 'networkidle0'],
+    waitUntil: ['load', options.networkidle || 'networkidle0'],
   };
 
   // Default sleep between steps: 1 second.
@@ -115,6 +113,14 @@ async function runFlow(flow, options) {
       page.setUserAgent(flow.userAgent);
     }
 
+    // Print console log inside puppeteer.evaluate().
+    page.on('console', consoleObj => console.log(consoleObj.text()));
+
+    // Extend querySelectorDeep to Element and Document.
+    page.once('load', async () => {
+      await page.addScriptTag({path: __dirname + '/script-querySelectorDeep.js'});
+    });
+
     // Create a dummy file for the path.
     let filePath = path.resolve(`${outputPath}/.dummy.txt`);
     await fse.outputFile(filePath, '');
@@ -141,20 +147,6 @@ async function runFlow(flow, options) {
         let pageObj = getPageObject(page, action);
         let el;
 
-        // Extend Document and Eelemnt prototypes with querySelectorShadowDom.
-        await pageObj.evaluate(utils => {
-          Element.prototype.querySelectorShadowDom = function(selectors) {
-            return utils.querySelectorShadowDom(this, selectors);
-          };
-
-          Document.prototype.querySelectorShadowDom = function(selectors) {
-            return utils.querySelectorShadowDom(this, selectors);
-          };
-        }, utils);
-
-        // Print console log inside puppeteer.evaluate().
-        pageObj.on('console', consoleObj => console.log(consoleObj.text()));
-
         if (step.actions) {
           logger('action', `    action ${i+1}-${actionNumber}: ${action.actionType}`);
         } else {
@@ -167,7 +159,7 @@ async function runFlow(flow, options) {
             message = 'Opened URL ' + action.url;
             break;
 
-          case ActionType.WAIT_SECONDS:
+          case ActionType.SLEEP:
             await pageObj.waitFor(parseInt(action.value));
             message = `Waited for ${action.value} seconds`;
             break;
@@ -186,33 +178,27 @@ async function runFlow(flow, options) {
 
           case ActionType.CLICK:
             {
-              let elHandle = await getElementHandleByContent(
-                  pageObj, action.selector || '*', action.content,
-                  true /* visibleOnly */);
-              if (!elHandle) throw new Error(`Unable to find visible element with content \"${action.content}\"`);
+              let elHandle = await pageObj.$(action.selector);
+              if (!elHandle) throw new Error(`Unable to find element: \"${action.selector}\"`);
+
               elHandle.click();
+              message = `Clicked element: ${action.selector}`;
             }
-            message = `Clicked element - selector: ${action.selector}, content: ${action.content}`;
             break;
 
           case ActionType.SELECT:
             await pageObj.select(action.selector, action.value);
-            message = `Selected ${value} for element ${action.selector}`;
+            message = `Selected ${value} for element: ${action.selector}`;
             break;
 
           case ActionType.SCROLL_TO:
             {
               await pageObj.evaluate((action) => {
-                let selector = action.selector || '*';
-                let elements = document.querySelectorAll(selector);
-                if (elements && action.content) {
-                  elements = Array.prototype.filter.call(
-                    elements, x => x.innerText === action.content);
-                }
-                if (elements[0]) elements[0].scrollIntoView();
+                let el = document.querySelector(action.selector);
+                if (el) el.scrollIntoView();
                 return true;
               }, action);
-              message = `Scrolled to element with content ${action.content}`;
+              message = `Scrolled to element: ${action.selector}`;
             }
             break;
 
@@ -252,19 +238,15 @@ async function runFlow(flow, options) {
 
           case ActionType.ASSERT_EXIST:
             {
-              let el = await pageObj.evaluate((action) => {
-                console.log(action.selector);
-                document.querySelectorShadowDom(action.selector);
-              }, action);
-              if (!el) throw new Error(`Unable to find ${action.selector}`);
+              let result = await pageObj.$eval(action.selector, el => el.nodeName);
+              if (!result) throw new Error(`Unable to find ${action.selector}`);
             }
             break;
 
           case ActionType.ASSERT_CONTENT:
             {
               let content = action.content;
-              let bodyContent = await pageObj.evaluate(
-                  () => document.querySelector('body').innerText);
+              let bodyContent = await pageObj.$eval(action.selector, el => el.textContent);
               if (bodyContent.indexOf(content) < 0 && bodyContent.indexOf(escapeXml(content))) {
                 throw new Error(`Didn\'t see text \"${content}\"`);
               }
@@ -329,6 +311,8 @@ async function runFlow(flow, options) {
     }
 
     await outputToFile(`${outputPath}/output-logs.txt`, logs.join('\r\n'));
+
+    console.log('Flow Complete.'.cyan);
 
     if (browser) await browser.close();
     if (error) throw error;

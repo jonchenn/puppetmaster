@@ -23,20 +23,20 @@ let task = {
         actionType: ActionType.URL,
         url: 'http://jonchen-shop.firebaseapp.com',
       }, {
+        actionType: ActionType.SLEEP,
+        value: 2000,
+      }, {
         actionType: ActionType.ASSERT_PAGE_TITLE,
         content: 'Home - SHOP',
       }]
     }, {
       actionType: ActionType.ASSERT_EXIST,
-      selector: 'shop-app',
-    }, {
-      actionType: ActionType.ASSERT_EXIST,
-      selector: 'iron-pages',
+      selector: 'shop-app::shadowRoot shop-home::shadowRoot shop-button',
     }, {
       actionType: ActionType.SCROLL_TO,
-      content: 'Men\'s T-Shirts',
+      selector: 'shop-app::shadowRoot shop-home::shadowRoot :nth-child(4) > shop-button',
     }, {
-      selector: 'shop-home[name=home] item:nth-child(3) > shop-button',
+      selector: 'shop-app::shadowRoot shop-home::shadowRoot :nth-child(4) > shop-button',
       actionType: ActionType.CLICK,
       // content: 'Shop Now',
       sleepAfter: 2000,
@@ -46,18 +46,19 @@ let task = {
         content: 'Men\'s T-Shirts - SHOP',
       }, {
         actionType: ActionType.ASSERT_CONTENT,
+        selector: 'shop-app::shadowRoot shop-list::shadowRoot',
         content: 'Men\'s T-Shirts',
       }],
     }, {
       actionType: ActionType.CLICK,
-      content: 'YouTube Organic Cotton T-Shirt - Grey',
+      selector: 'shop-app::shadowRoot shop-list::shadowRoot ul > li:nth-child(1)',
     }, {
       actionType: ActionType.CLICK,
-      content: 'ADD TO CART',
+      selector: 'shop-app::shadowRoot shop-detail::shadowRoot #content shop-button > button',
       sleepAfter: 1000,
     }, {
       actionType: ActionType.CLICK,
-      content: 'VIEW CART',
+      selector: 'shop-app::shadowRoot shop-cart-modal::shadowRoot #viewCartAnchor',
     }, {
       actionType: ActionType.ASSERT_PAGE_TITLE,
       content: 'Your cart - SHOP',
