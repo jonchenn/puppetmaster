@@ -12,6 +12,7 @@ let task = {
   sleepAfterEachStep: 500,
   sleepAfterEachAction: 500,
   outputHtmlToFile: true,
+  screenshot: true,
   stopWhenFail: true,
   showConsoleOutput: false,
   userAgent: 'fake-useragent',

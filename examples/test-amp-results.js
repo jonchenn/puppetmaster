@@ -11,6 +11,7 @@ let task = {
   sleepAfterEachStep: 1000,
   sleepAfterEachAction: 1000,
   outputHtmlToFile: true,
+  screenshot: true,
   stopWhenFail: true,
   steps: [{
     log: 'Search amp start on Google Search',
@@ -23,7 +24,7 @@ let task = {
       inputText: 'amp start',
     }, {
       actionType: ActionType.ASSERT_PAGE_TITLE,
-      match: 'amp start - Google Search',
+      content: 'amp start - Google Search',
     }]
   }, {
     log: 'Click first AMP result in the SERP',
@@ -36,7 +37,7 @@ let task = {
     }, {
       actionType: ActionType.ASSERT_INNER_TEXT,
       selector: '.amp-ttltxt',
-      match: 'ampstart.com',
+      content: 'ampstart.com',
     }, {
       iframe: 1,
       actionType: ActionType.WRITE_TO_FILE,
@@ -48,7 +49,7 @@ let task = {
     actions: [{
       iframe: 1,
       actionType: ActionType.ASSERT_TEXT,
-      match: 'Get started quickly with a ready-made design.',
+      content: 'Get started quickly with a ready-made design.',
     }, {
       iframe: 1,
       actionType: ActionType.CLICK,
@@ -56,13 +57,13 @@ let task = {
     }, {
       iframe: 1,
       actionType: ActionType.CLICK_BY_TEXT,
-      match: 'HOW IT WORKS',
+      content: 'HOW IT WORKS',
     }],
   }, {
     log: 'Verify get started page content',
     actions: [{
       actionType: ActionType.ASSERT_TEXT,
-      match: 'Work it works',
+      content: 'Work it works',
     }],
   }],
 };

@@ -148,8 +148,18 @@ async function runFlow(flow, context, options) {
       page.setUserAgent(options.userAgent);
     }
 
-    // Print console log inside puppeteer.evaluate().
-    page.on('console', consoleObj => console.log(consoleObj.text()));
+    // Simulate request blocking in Chrome DevTools.
+    await page.setRequestInterception(true);
+    page.on('request', (request) => {
+      let isAbort = false;
+      (flow.requestBlocking || []).forEach((regex) => {
+        if (regex && regex.test(request.url())) {
+          logger('info', `Request blocking: ${request.url()}`);
+          isAbort = true;
+        }
+      });
+      isAbort ? request.abort() : request.continue();
+    });
 
     // Extend querySelectorDeep to Element and Document.
     page.once('load', async () => {
@@ -316,9 +326,12 @@ async function runFlow(flow, context, options) {
       }
 
       await page.waitFor(sleepAfterEachStep);
-      await page.screenshot({
-        path: `${outputPath}/flow-${context.flowNumber}/step-${i+1}.png`
-      });
+
+      if (options.screenshot) {
+        await page.screenshot({
+          path: `${outputPath}/flow-${context.flowNumber}/step-${i+1}.png`
+        });
+      }
 
       // Output to file.
       if (flow.outputHtmlToFile) {
@@ -336,9 +349,12 @@ async function runFlow(flow, context, options) {
       let filePath = path.resolve(`${outputPath}/flow-${context.flowNumber}/result.json`);
       await fse.outputFile(filePath, '{}');
 
-      await page.screenshot({
-        path: `${outputPath}/flow-${context.flowNumber}/step-final.png`
-      });
+      if (options.screenshot) {
+        await page.screenshot({
+          path: `${outputPath}/flow-${context.flowNumber}/step-final.png`
+        });
+      }
+
       await outputHtmlToFile(
         `${outputPath}/flow-${context.flowNumber}/output-step-final.html`,
         await page.content());
