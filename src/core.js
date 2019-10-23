@@ -109,6 +109,9 @@ async function runFlow(flow, context, options) {
   let waitOptions = {
     waitUntil: [options.networkidle || 'networkidle0', 'load'],
   };
+  let flowResult = {
+    steps: [],
+  };
 
   // Default sleep between steps: 1 second.
   let sleepAfterEachAction = options.sleepAfterEachAction || 1000;
@@ -166,6 +169,8 @@ async function runFlow(flow, context, options) {
       await page.addScriptTag({path: __dirname + '/script-querySelectorDeep.js'});
     });
 
+    flowResult.startTime = Date.now();
+
     // Execute steps.
     for (var i = 0; i < flow.steps.length; i++) {
       let step = flow.steps[i];
@@ -178,8 +183,11 @@ async function runFlow(flow, context, options) {
         logger('info', 'no actions or skipped');
         continue;
       };
+      let actionStartTime = Date.now();
 
       let actionNumber = 0;
+      let actionResult = [];
+
       for (let [index, action] of Object.entries(actions)) {
         actionNumber++;
         let message = action.actionType;
@@ -319,11 +327,23 @@ async function runFlow(flow, context, options) {
             throw new Error(`action ${action.actionType} is not supported.`);
             break;
         }
+
+        actionResult.push({
+          actionType: action.actionType,
+          actionTimelapse: Date.now() - actionStartTime,
+          timelapse: Date.now() - flowResult.startTime,
+        });
+
         if (action.sleepAfter) await page.waitFor(action.sleepAfter);
         await page.waitFor(sleepAfterEachAction);
 
         logger('info', `\t${action.log || action.actionType}: ${message}`);
       }
+
+      flowResult.steps.push({
+        actions: actionResult,
+        timelapse: Date.now() - flowResult.startTime,
+      });
 
       await page.waitFor(sleepAfterEachStep);
 
@@ -346,8 +366,11 @@ async function runFlow(flow, context, options) {
 
   } finally {
     if (page) {
+      flowResult.endTime = Date.now();
+      flowResult.timelapse = flowResult.endTime - flowResult.startTime;
+
       let filePath = path.resolve(`${outputPath}/flow-${context.flowNumber}/result.json`);
-      await fse.outputFile(filePath, '{}');
+      await fse.outputFile(filePath, JSON.stringify(flowResult));
 
       if (options.screenshot) {
         await page.screenshot({
