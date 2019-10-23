@@ -22,6 +22,8 @@ const ActionType = {
   TYPE_THEN_SUBMIT: 'typeThenSubmit',
   // Click a specific element.
   CLICK: 'click',
+  // Click a specific element.
+  TAP: 'tap',
   // Select a specific element with a value.
   SELECT: 'select',
   // Scroll to a specific elemnt.
@@ -130,6 +132,7 @@ async function runFlow(flow, context, options) {
     });
     page = await browser.newPage();
     await page.emulate(devices[device]);
+
     if (options.showConsoleOutput) {
       page.on('console',
           msg => logger('console', `\tPage console output: ${msg.text()}`));
@@ -168,6 +171,10 @@ async function runFlow(flow, context, options) {
     page.once('load', async () => {
       await page.addScriptTag({path: __dirname + '/script-querySelectorDeep.js'});
     });
+
+    if (options.tracing) {
+      await page.tracing.start({path: `${outputPath}/flow-${context.flowNumber}/trace.json`});
+    }
 
     flowResult.startTime = Date.now();
 
@@ -232,6 +239,13 @@ async function runFlow(flow, context, options) {
 
               elHandle.click();
               message = `Clicked element: ${action.selector}`;
+            }
+            break;
+
+          case ActionType.TAP:
+            {
+              await pageObj.tap(action.selector);
+              message = `Tapped element: ${action.selector}`;
             }
             break;
 
@@ -351,6 +365,10 @@ async function runFlow(flow, context, options) {
         await page.screenshot({
           path: `${outputPath}/flow-${context.flowNumber}/step-${i+1}.png`
         });
+      }
+
+      if (options.tracing) {
+        await page.tracing.stop();
       }
 
       // Output to file.
