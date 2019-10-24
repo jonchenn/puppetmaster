@@ -128,9 +128,15 @@ async function runFlow(flow, context, options) {
     // Init puppeteer.
     browser = await puppeteer.launch({
       headless: options.isHeadless,
-      args: [`--window-size=${options.windowWidth},${options.windowHeight}`],
+      ignoreDefaultArgs: true,
+      args: [
+        `--window-size=${options.windowWidth},${options.windowHeight}`,
+        '--enable-devtools-experiments=true',
+      ],
+      executablePath: '/usr/bin/google-chrome-beta',
     });
     page = await browser.newPage();
+
     await page.emulate(devices[device]);
 
     if (options.showConsoleOutput) {
@@ -142,9 +148,22 @@ async function runFlow(flow, context, options) {
     let filePath = path.resolve(`${outputPath}/flow-${context.flowNumber}/result.json`);
     await fse.outputFile(filePath, '{}');
 
+    debugger;
+
     // Set Network speed.
     // Connect to Chrome DevTools and set throttling property.
-    const devTools = await page.target().createCDPSession()
+    const devTools = await page.target().createCDPSession();
+    // await devTools.send('Network.enable');
+    // await devTools.send('ServiceWorker.disable', {
+    //   bypass: true,
+    // });
+    //
+    // await devTools.send('Network.setBlockedURLs', {
+    //   urls: [
+    //     'www.bedbathandbeyond.com/static/sw.js*',
+    //     'scene7.com/is/image*',
+    //   ],
+    // });
     if (options.networkConfig) {
       await devTools.send('Network.emulateNetworkConditions', options.networkConfig);
     }
@@ -173,7 +192,11 @@ async function runFlow(flow, context, options) {
     });
 
     if (options.tracing) {
-      await page.tracing.start({path: `${outputPath}/flow-${context.flowNumber}/trace.json`});
+      logger('info', 'Start tracing.');
+      await page.tracing.start({
+        screenshots: true,
+        path: `${outputPath}/flow-${context.flowNumber}/trace.json`
+      });
     }
 
     flowResult.startTime = Date.now();
@@ -367,10 +390,6 @@ async function runFlow(flow, context, options) {
         });
       }
 
-      if (options.tracing) {
-        await page.tracing.stop();
-      }
-
       // Output to file.
       if (flow.outputHtmlToFile) {
         await outputHtmlToFile(
@@ -403,10 +422,17 @@ async function runFlow(flow, context, options) {
 
     await outputToFile(`${outputPath}/output-logs.txt`, logs.join('\r\n'));
 
-    console.log('Flow Complete.'.cyan);
+    if (options.tracing) {
+      await page.tracing.stop();
+    }
 
     if (browser) await browser.close();
-    if (error) throw error;
+    if (error) {
+      console.log('Flow terminated with erorr.'.red);
+      throw error;
+    } else {
+      console.log('Flow Complete.'.cyan);
+    }
   }
 }
 
