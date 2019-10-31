@@ -131,9 +131,9 @@ async function runFlow(flow, context, options) {
       ignoreDefaultArgs: true,
       args: [
         `--window-size=${options.windowWidth},${options.windowHeight}`,
-        '--enable-devtools-experiments=true',
+        // '--enable-devtools-experiments=true',
       ],
-      executablePath: '/usr/bin/google-chrome-beta',
+      // executablePath: '/usr/bin/google-chrome-beta',
     });
     page = await browser.newPage();
 
@@ -165,7 +165,13 @@ async function runFlow(flow, context, options) {
     //   ],
     // });
     if (options.networkConfig) {
-      await devTools.send('Network.emulateNetworkConditions', options.networkConfig);
+      await devTools.send(
+        'Network.emulateNetworkConditions',
+        NETWORK_CONFIG[options.networkConfig]);
+    }
+
+    if (options.disableCache) {
+      await page.setCacheEnabled(false);
     }
 
     // Override user agent.
@@ -174,17 +180,19 @@ async function runFlow(flow, context, options) {
     }
 
     // Simulate request blocking in Chrome DevTools.
-    await page.setRequestInterception(true);
-    page.on('request', (request) => {
-      let isAbort = false;
-      (flow.requestBlocking || []).forEach((regex) => {
-        if (regex && regex.test(request.url())) {
-          logger('info', `Request blocking: ${request.url()}`);
-          isAbort = true;
-        }
-      });
-      isAbort ? request.abort() : request.continue();
-    });
+    // await page.setRequestInterception(true);
+    // page.on('request', (request) => {
+    //   let isAbort = false;
+    //   (flow.requestBlocking || []).forEach((regex) => {
+    //     if (regex && regex.test(request.url())) {
+    //       logger('info', `Request blocking: ${request.url()}`);
+    //       isAbort = true;
+    //     }
+    //   });
+    //   isAbort ? request.abort() : request.continue();
+    // });
+
+    page.setDefaultNavigationTimeout(60000);
 
     // Extend querySelectorDeep to Element and Document.
     page.once('load', async () => {
@@ -234,7 +242,7 @@ async function runFlow(flow, context, options) {
 
         switch (action.actionType) {
           case ActionType.URL:
-            await pageObj.goto(action.url);
+            await pageObj.goto(action.url, {waitUntil: 'domcontentloaded'});
             message = 'Opened URL ' + action.url;
             break;
 
@@ -378,6 +386,7 @@ async function runFlow(flow, context, options) {
       }
 
       flowResult.steps.push({
+        log: step.log,
         actions: actionResult,
         timelapse: Date.now() - flowResult.startTime,
       });
@@ -418,13 +427,13 @@ async function runFlow(flow, context, options) {
       await outputHtmlToFile(
         `${outputPath}/flow-${context.flowNumber}/output-step-final.html`,
         await page.content());
+
+      if (options.tracing) {
+        await page.tracing.stop();
+      }
     }
 
     await outputToFile(`${outputPath}/output-logs.txt`, logs.join('\r\n'));
-
-    if (options.tracing) {
-      await page.tracing.stop();
-    }
 
     if (browser) await browser.close();
     if (error) {
