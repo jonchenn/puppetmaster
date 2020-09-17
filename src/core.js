@@ -1,3 +1,15 @@
+/**
+ * @license Copyright 2019 Google Inc. All Rights Reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at http://www.apache.org/licenses/LICENSE-2.0
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
+
 const puppeteer = require('puppeteer');
 const devices = require('puppeteer/DeviceDescriptors');
 const fse = require('fs-extra'); // v 5.0.0
@@ -5,11 +17,15 @@ const path = require('path');
 const beautify = require('js-beautify').html;
 const colors = require('colors');
 const assert = require('assert');
-const shuffle = require('shuffle-array');
-const NETWORK_CONFIG = require('./network-config');
+const NETWORK_CONFIG = require('../utils/network-config');
 const {
   JSDOM
 } = require("jsdom");
+
+const Status = {
+  SUCCESS: 'success',
+  ERROR: 'error',
+};
 
 const ActionType = {
   // Connect to a specific URL.
@@ -36,6 +52,10 @@ const ActionType = {
   ASSERT_EXIST: 'assertExist',
   // Assert a text content appears on the current page.
   ASSERT_CONTENT: 'assertContent',
+  // Assert a style change for a specific component.
+  ASSERT_STYLE_CHANGE: 'assertStyleChange',
+  // Take a snapshot of all classes of a given element.
+  STYLE_SNAPSHOT: 'styleSnapshot',
   // Take a screenshot of the current page.
   SCREENSHOT: 'screenshot',
   // Write page content to a file.
@@ -44,468 +64,445 @@ const ActionType = {
   CUSTOM_FUNC: 'customFunc',
 };
 
-let logs = [];
-
-// Return the page or iframe object.
-function getPageObject(page, action) {
-  if (typeof action.iframe === 'number') {
-    logger('info', `    On iframe #${action.iframe}`);
-    return page.frames()[action.iframe];
-  } else if (typeof action.iframe === 'string') {
-    logger('info', `    On iframe id = ${action.iframe}`);
-    return page.frames().find(frame => frame.name() === action.iframe);
+class PuppetMaster {
+  constructor(page, config) {
+    assert(page, 'Parameter `page` is missing');
+    this.logs = [];
+    this.config = config || {};
+    this.page = page;
   }
-  return page;
-}
 
-async function outputToFile(filename, text) {
-    let filePath = path.resolve(filename);
-    await fse.outputFile(filePath, text);
-}
+  async runFlow(flow, options) {
+    options = options || {};
+    flow.flowIndex = flow.flowIndex || 1;
 
-async function outputHtmlToFile(filename, content) {
-  // Output content
-  let html = beautify(content, {
-    indent_size: 2,
-    preserve_newlines: false,
-    content_unformatted: ['script', 'style'],
-  });
-  await outputToFile(filename, html);
-}
+    let error = null;
+    let browser, page, content;
+    let outputPath = options.outputPath || './';
+    let device = options.device || 'Pixel 2'
+    let waitOptions = {
+      waitUntil: [options.networkidle || 'networkidle0', 'load'],
+    };
+    let flowResult = {
+      steps: [],
+    };
 
-async function runTask(task, options) {
-  assert(task, 'Missing task');
+    // Default sleep between steps: 1 second.
+    let sleepAfterEachStep = options.sleepAfterEachStep || 1000;
+    let logs = [];
 
-  let visits = task.visits || 1;
-  let percentages = task.flows.map(flow => flow.percentage);
-  let denominator = percentages.reduce((a, b) => a + b);
-  let flowSeries = [];
+    try {
+      assert(flow.steps, 'Missing steps in flow.');
+      this.logger('info', `Use device ${device}`);
+      // page = await this.browser.newPage();
 
-  Object.keys(task).forEach(key => {
-    if (key !== 'flows') options[key] = task[key];
-  });
+      await this.page.emulate(devices[device]);
 
-  console.log(options);
-
-  for (let i=0; i<task.flows.length; i++) {
-    numFlow = Math.round(visits * task.flows[i].percentage / denominator);
-    for (let j=0; j<numFlow; j++) {
-      flowSeries.push(i);
-    }
-  }
-  shuffle(flowSeries);
-
-  for (let k=0; k<visits; k++) {
-    console.log(`Running flow ${k}...`.cyan);
-    await runFlow(task.flows[flowSeries[k]], {
-      flowNumber: k,
-    }, options);
-  }
-}
-
-async function runFlow(flow, context, options) {
-  let error = null;
-  let browser, page, content;
-  let outputPath = options.outputPath;
-  let device = options.device || 'Pixel 2'
-  let waitOptions = {
-    waitUntil: [options.networkidle || 'networkidle0', 'load'],
-  };
-  let flowResult = {
-    steps: [],
-  };
-
-  // Default sleep between steps: 1 second.
-  let sleepAfterEachAction = options.sleepAfterEachAction || 1000;
-  let sleepAfterEachStep = options.sleepAfterEachStep || 1000;
-
-  logs = [];
-
-  try {
-    assert(flow.steps, 'Missing steps in flow.');
-    logger('info', `Use device ${device}`);
-
-    // Init puppeteer.
-    browser = await puppeteer.launch({
-      headless: options.isHeadless,
-      ignoreDefaultArgs: true,
-      args: [
-        `--window-size=${options.windowWidth},${options.windowHeight}`,
-        // '--enable-devtools-experiments=true',
-      ],
-      // executablePath: '/usr/bin/google-chrome-beta',
-    });
-    page = await browser.newPage();
-
-    await page.emulate(devices[device]);
-
-    if (options.showConsoleOutput) {
-      page.on('console',
-          msg => logger('console', `\tPage console output: ${msg.text()}`));
-    }
-
-    // Create a dummy file for the path.
-    let filePath = path.resolve(`${outputPath}/flow-${context.flowNumber}/result.json`);
-    await fse.outputFile(filePath, '{}');
-
-    debugger;
-
-    // Set Network speed.
-    // Connect to Chrome DevTools and set throttling property.
-    const devTools = await page.target().createCDPSession();
-    // await devTools.send('Network.enable');
-    // await devTools.send('ServiceWorker.disable', {
-    //   bypass: true,
-    // });
-    //
-    // await devTools.send('Network.setBlockedURLs', {
-    //   urls: [
-    //     'www.bedbathandbeyond.com/static/sw.js*',
-    //     'scene7.com/is/image*',
-    //   ],
-    // });
-    if (options.networkConfig) {
-      await devTools.send(
-        'Network.emulateNetworkConditions',
-        NETWORK_CONFIG[options.networkConfig]);
-    }
-
-    if (options.disableCache) {
-      await page.setCacheEnabled(false);
-    }
-
-    // Override user agent.
-    if (options.userAgent) {
-      page.setUserAgent(options.userAgent);
-    }
-
-    // Simulate request blocking in Chrome DevTools.
-    // await page.setRequestInterception(true);
-    // page.on('request', (request) => {
-    //   let isAbort = false;
-    //   (flow.requestBlocking || []).forEach((regex) => {
-    //     if (regex && regex.test(request.url())) {
-    //       logger('info', `Request blocking: ${request.url()}`);
-    //       isAbort = true;
-    //     }
-    //   });
-    //   isAbort ? request.abort() : request.continue();
-    // });
-
-    page.setDefaultNavigationTimeout(60000);
-
-    // Extend querySelectorDeep to Element and Document.
-    page.once('load', async () => {
-      await page.addScriptTag({path: __dirname + '/script-querySelectorDeep.js'});
-    });
-
-    if (options.tracing) {
-      logger('info', 'Start tracing.');
-      await page.tracing.start({
-        screenshots: true,
-        path: `${outputPath}/flow-${context.flowNumber}/trace.json`
-      });
-    }
-
-    flowResult.startTime = Date.now();
-
-    // Execute steps.
-    for (var i = 0; i < flow.steps.length; i++) {
-      let step = flow.steps[i];
-      let stepLog = `Step ${i+1}`;
-      if (step.log) stepLog += `: ${step.log}`;
-      logger('step', stepLog);
-
-      let actions = step.actions || [step];
-      if (!actions || step.skip) {
-        logger('info', 'no actions or skipped');
-        continue;
-      };
-      let actionStartTime = Date.now();
-
-      let actionNumber = 0;
-      let actionResult = [];
-
-      for (let [index, action] of Object.entries(actions)) {
-        actionNumber++;
-        let message = action.actionType;
-
-        // Get page instance for current document or iframe.
-        let pageObj = getPageObject(page, action);
-        let el;
-
-        if (step.actions) {
-          logger('action', `    action ${i+1}-${actionNumber}: ${action.actionType}`);
-        } else {
-          logger('action', `    action: ${action.actionType}`);
-        }
-
-        switch (action.actionType) {
-          case ActionType.URL:
-            await pageObj.goto(action.url, {waitUntil: 'domcontentloaded'});
-            message = 'Opened URL ' + action.url;
-            break;
-
-          case ActionType.SLEEP:
-            await pageObj.waitFor(parseInt(action.value));
-            message = `Waited for ${action.value} ms`;
-            break;
-
-          case ActionType.WAIT_FOR_ELEMENT:
-            await pageObj.waitFor(action.selector);
-            message = `Waited for element ${action.selector}`;
-            break;
-
-          case ActionType.TYPE_THEN_SUBMIT:
-            await pageObj.waitFor(action.selector);
-            await pageObj.type(action.selector, action.inputText);
-            await pageObj.keyboard.press('Enter');
-            message = `Typed in element ${action.selector} with ${action.inputText}`;
-            break;
-
-          case ActionType.CLICK:
-            {
-              let elHandle = await pageObj.$(action.selector);
-              if (!elHandle) throw new Error(`Unable to find element: \"${action.selector}\"`);
-
-              elHandle.click();
-              message = `Clicked element: ${action.selector}`;
-            }
-            break;
-
-          case ActionType.TAP:
-            {
-              await pageObj.tap(action.selector);
-              message = `Tapped element: ${action.selector}`;
-            }
-            break;
-
-          case ActionType.SELECT:
-            await pageObj.select(action.selector, action.value);
-            message = `Selected ${value} for element: ${action.selector}`;
-            break;
-
-          case ActionType.SCROLL_TO:
-            {
-              await pageObj.evaluate((action) => {
-                let el = document.querySelector(action.selector);
-                if (el) el.scrollIntoView();
-                return true;
-              }, action);
-              message = `Scrolled to element: ${action.selector}`;
-            }
-            break;
-
-          case ActionType.ASSERT_PAGE_TITLE:
-            {
-              let pageTitle = await pageObj.title();
-              if (!action.content && !action.contentRegex) {
-                throw new Error('Missing match or matchRegex attributes in ASSERT_PAGE_TITLE action.');
-              }
-              if (action.content && action.content !== pageTitle) {
-                throw new Error(`Page title "${pageTitle}" doesn't match ${action.content}`);
-              }
-              if (action.contentRegex && !action.contentRegex.match(pageTitle)) {
-                throw new Error(`Page title "${pageTitle}" doesn't match ${action.contentRegex}`);
-              }
-              message = `Page title matched: "${pageTitle}"`;
-            }
-            break;
-
-          case ActionType.ASSERT_INNER_TEXT:
-            {
-              let innerText = await pageObj.$eval(action.selector, el => el.innerText);
-              if (!action.content && !action.contentRegex) {
-                throw new Error('Missing match or matchRegex attributes in ASSERT_PAGE_TITLE action.');
-              }
-              if (action.content && action.content !== innerText) {
-                throw new Error(`Expect element ${action.selector} to match ` +
-                  `title as "${action.content}", but got "${innerText}".`);
-              }
-              if (action.contentRegex && !action.contentRegex.match(innerText)) {
-                throw new Error(`Expect element ${action.selector} to match ` +
-                  `title as "${action.contentRegex}", but got "${innerText}".`);
-              }
-              message = `Matched text for element ${action.selector}`;
-            }
-            break;
-
-          case ActionType.ASSERT_EXIST:
-            {
-              let result = await pageObj.$eval(action.selector, el => el.nodeName);
-              if (!result) throw new Error(`Unable to find ${action.selector}`);
-            }
-            break;
-
-          case ActionType.ASSERT_CONTENT:
-            {
-              let content = action.content;
-              let bodyContent = await pageObj.$eval(action.selector, el => el.textContent);
-              if (bodyContent.indexOf(content) < 0 && bodyContent.indexOf(escapeXml(content))) {
-                throw new Error(`Didn\'t see text \"${content}\"`);
-              }
-              message = `Saw text content \"${content}\" on the page.`;
-            }
-            break;
-
-          case ActionType.SCREENSHOT:
-            await page.screenshot({
-              path: `${outputPath}/${action.filename}`
-            });
-            message = `Screenshot saved to ${action.filename}`;
-            break;
-
-          case ActionType.WRITE_TO_FILE:
-            content = await pageObj.$eval(action.selector, el => el.outerHTML);
-            await outputHtmlToFile(
-              `${outputPath}/flow-${context.flowNumber}/${action.filename}`, content);
-            message = `write ${action.selector} to ${action.filename}`;
-            break;
-
-          case ActionType.CUSTOM_FUNC:
-            if (action.customFunc) {
-              await action.customFunc(action, pageObj);
-            }
-            break;
-
-          default:
-            throw new Error(`action ${action.actionType} is not supported.`);
-            break;
-        }
-
-        actionResult.push({
-          actionType: action.actionType,
-          actionTimelapse: Date.now() - actionStartTime,
-          timelapse: Date.now() - flowResult.startTime,
-        });
-
-        if (action.sleepAfter) await page.waitFor(action.sleepAfter);
-        await page.waitFor(sleepAfterEachAction);
-
-        logger('info', `\t${action.log || action.actionType}: ${message}`);
+      if (options.showConsoleOutput) {
+        this.page.on('console',
+            msg => this.logger('console', `\tPage console output: ${msg.text()}`));
       }
 
-      flowResult.steps.push({
-        log: step.log,
-        actions: actionResult,
-        timelapse: Date.now() - flowResult.startTime,
+      // Create a dummy file for the path.
+      if (flow.outputToFile) {
+        let filePath = path.resolve(`${outputPath}/flow-${flow.flowIndex}/result.json`);
+        await fse.outputFile(filePath, '{}');
+      }
+
+      debugger;
+
+      // Set Network speed.
+      // Connect to Chrome DevTools and set throttling property.
+      const devTools = await this.page.target().createCDPSession();
+      if (options.networkConfig) {
+        await devTools.send(
+          'Network.emulateNetworkConditions',
+          NETWORK_CONFIG[options.networkConfig]);
+      }
+
+      if (options.disableCache) {
+        await this.page.setCacheEnabled(false);
+      }
+
+      // Override user agent.
+      if (options.userAgent) {
+        this.page.setUserAgent(options.userAgent);
+      }
+
+      this.page.setDefaultNavigationTimeout(60000);
+
+      // Extend querySelectorDeep to Element and Document.
+      this.page.once('load', async () => {
+        await this.page.addScriptTag({path: __dirname + '/script-querySelectorDeep.js'});
       });
 
-      await page.waitFor(sleepAfterEachStep);
+      if (options.tracing) {
+        this.logger('info', 'Start tracing.');
+        await this.page.tracing.start({
+          screenshots: true,
+          path: `${outputPath}/flow-${flow.flowIndex}/trace.json`
+        });
+      }
 
-      if (options.screenshot) {
-        await page.screenshot({
-          path: `${outputPath}/flow-${context.flowNumber}/step-${i+1}.png`
+      flowResult.startTime = Date.now();
+
+      // Cross-step variables:
+      let stepContext = {};
+
+      // Execute steps.
+      for (var i = 0; i < flow.steps.length; i++) {
+        let step = flow.steps[i];
+        let stepLog = `Step ${i+1}`;
+
+        if (step.log) stepLog += `: ${step.log}`;
+        this.logger('step', stepLog);
+
+        if (step.skip) {
+          this.logger('info', 'step skipped');
+          continue;
+        };
+
+        let stepStartTime = Date.now();
+        let message = step.actionType;
+
+        // Get page instance for current document or iframe.
+        let pageObj = this.getPageObject(this.page, step);
+        let el;
+
+        this.logger('step', `    action: ${step.actionType}`);
+
+        // Execute action and collect step-wide context.
+        await this.executeAction(pageObj, step, stepContext);
+
+        if (step.sleepAfter) await this.page.waitFor(step.sleepAfter);
+        await this.page.waitFor(sleepAfterEachStep);
+
+        flowResult.steps.push({
+          log: stepLog,
+          actionType: step.actionType,
+          timelapse: Date.now() - flowResult.startTime,
+          stepContext: stepContext,
+        });
+
+        this.logger('info', `\t${step.log || step.actionType}: ${message}`);
+      }
+
+      await this.page.waitFor(sleepAfterEachStep);
+
+      // Take screenshot.
+      if (flow.outputScreenshot) {
+        await this.page.screenshot({
+          path: `${outputPath}/flow-${flow.flowIndex}/step-${i+1}.png`
         });
       }
 
       // Output to file.
-      if (flow.outputHtmlToFile) {
-        await outputHtmlToFile(
-          `${outputPath}/flow-${context.flowNumber}/output-step-${i+1}.html`,
-          await page.content());
+      if (flow.outputToFile) {
+        await this.outputHtmlToFile(
+          `${outputPath}/flow-${flow.flowIndex}/output-step-${i+1}.html`,
+          await this.page.content());
       }
+
+    } catch (e) {
+      error = e;
+
+    } finally {
+      if (this.page) {
+        flowResult.endTime = Date.now();
+        flowResult.timelapse = flowResult.endTime - flowResult.startTime;
+
+        if (flow.outputResultToFile) {
+          let filePath = path.resolve(`${outputPath}/flow-${flow.flowIndex}/result.json`);
+          await fse.outputFile(filePath, JSON.stringify(flowResult));
+        }
+
+        if (flow.outputScreenshot) {
+          await this.page.screenshot({
+            path: `${outputPath}/flow-${flow.flowIndex}/step-final.png`
+          });
+        }
+
+        if (flow.outputToFile) {
+          await this.outputHtmlToFile(
+            `${outputPath}/flow-${flow.flowIndex}/output-step-final.html`,
+            await this.page.content());
+        }
+        if (flow.tracing) {
+          await this.page.tracing.stop();
+        }
+      }
+
+      if (flow.outputResultToFile) {
+        await this.outputToFile(`${outputPath}/output-logs.txt`,
+            this.logs.join('\r\n'));
+      }
+
+      // if (this.browser) await browser.close();
+      if (error) {
+        console.log('Flow terminated with erorr.'.red);
+        console.log(error);
+        flowResult.error = error.message;
+        flowResult.status = Status.ERROR;
+
+      } else {
+        console.log('Flow Complete.'.cyan);
+        flowResult.status = Status.SUCCESS;
+      }
+
+      return flowResult;
     }
+  }
 
-  } catch (e) {
-    error = e;
+  async executeAction(pageObj, step, stepContext) {
+    switch (step.actionType) {
+      case ActionType.URL:
+        await pageObj.goto(step.url, {waitUntil: 'domcontentloaded'});
+        stepContext.message = 'Opened URL ' + step.url;
+        break;
 
-  } finally {
-    if (page) {
-      flowResult.endTime = Date.now();
-      flowResult.timelapse = flowResult.endTime - flowResult.startTime;
+      case ActionType.SLEEP:
+        await pageObj.waitFor(parseInt(step.value));
+        stepContext.message = `Waited for ${step.value} ms`;
+        break;
 
-      let filePath = path.resolve(`${outputPath}/flow-${context.flowNumber}/result.json`);
-      await fse.outputFile(filePath, JSON.stringify(flowResult));
+      case ActionType.WAIT_FOR_ELEMENT:
+        await pageObj.waitFor(step.selector);
+        stepContext.message = `Waited for element ${step.selector}`;
+        break;
 
-      if (options.screenshot) {
+      case ActionType.TYPE_THEN_SUBMIT:
+        await pageObj.waitFor(step.selector);
+        await pageObj.type(step.selector, step.inputText);
+        await pageObj.keyboard.press('Enter');
+        stepContext.message = `Typed in element ${step.selector} with ${step.inputText}`;
+        break;
+
+      case ActionType.CLICK:
+        {
+          let elHandle = await pageObj.$(step.selector);
+          if (!elHandle) throw new Error(`Unable to find element: \"${step.selector}\"`);
+
+          elHandle.click();
+          stepContext.message = `Clicked element: ${step.selector}`;
+        }
+        break;
+
+      case ActionType.TAP:
+        {
+          await pageObj.tap(step.selector);
+          stepContext.message = `Tapped element: ${step.selector}`;
+        }
+        break;
+
+      case ActionType.SELECT:
+        await pageObj.select(step.selector, step.value);
+        stepContext.message = `Selected ${value} for element: ${step.selector}`;
+        break;
+
+      case ActionType.SCROLL_TO:
+        {
+          await pageObj.evaluate((step) => {
+            let el = document.querySelector(step.selector);
+            if (el) el.scrollIntoView();
+            return true;
+          }, step);
+          stepContext.message = `Scrolled to element: ${step.selector}`;
+        }
+        break;
+
+      case ActionType.ASSERT_PAGE_TITLE:
+        {
+          let pageTitle = await pageObj.title();
+          if (!step.value && !step.valueRegex) {
+            throw new Error('Missing match or matchRegex attributes in ASSERT_PAGE_TITLE step.');
+          }
+          if (step.value && step.value !== pageTitle) {
+            throw new Error(`Page title "${pageTitle}" doesn't match ${step.value}`);
+          }
+          if (step.valueRegex && !step.valueRegex.match(pageTitle)) {
+            throw new Error(`Page title "${pageTitle}" doesn't match ${step.valueRegex}`);
+          }
+          stepContext.message = `Page title matched: "${pageTitle}"`;
+        }
+        break;
+
+      case ActionType.ASSERT_INNER_TEXT:
+        {
+          let innerText = await pageObj.$eval(step.selector, el => el.innerText);
+          if (!step.value && !step.valueRegex) {
+            throw new Error('Missing match or matchRegex attributes in ASSERT_PAGE_TITLE step.');
+          }
+          if (step.value && step.value !== innerText) {
+            throw new Error(`Expect element ${step.selector} to match ` +
+              `title as "${step.value}", but got "${innerText}".`);
+          }
+          if (step.valueRegex && !step.valueRegex.match(innerText)) {
+            throw new Error(`Expect element ${step.selector} to match ` +
+              `title as "${step.valueRegex}", but got "${innerText}".`);
+          }
+          stepContext.message = `Matched text for element ${step.selector}`;
+        }
+        break;
+
+      case ActionType.ASSERT_EXIST:
+        {
+          let result = await pageObj.$eval(step.selector, el => el.nodeName);
+          if (!result) throw new Error(`Unable to find ${step.selector}`);
+        }
+        break;
+
+      case ActionType.ASSERT_CONTENT:
+        {
+          let content = step.value;
+          let bodyContent = await pageObj.$eval(
+              step.selector || 'body', el => el.textContent);
+          if (bodyContent.indexOf(content) < 0 && bodyContent.indexOf(this.escapeXml(content))) {
+            throw new Error(`Didn\'t see text \"${content}\"`);
+          }
+          stepContext.message = `Saw text content \"${content}\" on the page.`;
+        }
+        break;
+
+      case ActionType.STYLE_SNAPSHOT:
+        {
+          assert(step.selector,
+              'Missing selector attribute in STYLE_SNAPSHOT step.');
+          // Sample style snapshot:
+          // form.a[div.b[input.c,input.d],div.e]
+          stepContext.styleSnapshot = await pageObj.evaluate(
+              this.evaluteStyleSnapshot, step);
+        }
+        break;
+
+      case ActionType.ASSERT_STYLE_CHANGE:
+        {
+          assert(step.selector,
+              'Missing selector attribute in STYLE_SNAPSHOT step.');
+          let newStyleSnapshot = await pageObj.evaluate(this.evaluteStyleSnapshot, step);
+          if (newStyleSnapshot === stepContext.styleSnapshot) {
+            throw new Error(`No styles change detected`);
+          }
+        }
+        break;
+
+      case ActionType.SCREENSHOT:
         await page.screenshot({
-          path: `${outputPath}/flow-${context.flowNumber}/step-final.png`
+          path: `${outputPath}/${step.filename}`
         });
-      }
+        stepContext.message = `Screenshot saved to ${step.filename}`;
+        break;
 
-      await outputHtmlToFile(
-        `${outputPath}/flow-${context.flowNumber}/output-step-final.html`,
-        await page.content());
+      case ActionType.WRITE_TO_FILE:
+        content = await pageObj.$eval(step.selector, el => el.outerHTML);
+        await this.outputHtmlToFile(
+          `${outputPath}/flow-${flow.flowIndex}/${step.filename}`, content);
+        stepContext.message = `write ${step.selector} to ${step.filename}`;
+        break;
 
-      if (options.tracing) {
-        await page.tracing.stop();
-      }
+      case ActionType.CUSTOM_FUNC:
+        if (step.customFunc) {
+          await step.customFunc(step, pageObj);
+        }
+        break;
+
+      default:
+        throw new Error(`action ${step.actionType} is not supported.`);
+        break;
     }
-
-    await outputToFile(`${outputPath}/output-logs.txt`, logs.join('\r\n'));
-
-    if (browser) await browser.close();
-    if (error) {
-      console.log('Flow terminated with erorr.'.red);
-      throw error;
-    } else {
-      console.log('Flow Complete.'.cyan);
-    }
-  }
-}
-
-function escapeXml(input) {
-  return input.replace(/&/g, '&amp;')
-             .replace(/</g, '&lt;')
-             .replace(/>/g, '&gt;')
-             .replace(/"/g, '&quot;')
-             .replace(/'/g, '&apos;');
-}
-
-function logger(type, msg) {
-  if (!msg) return;
-
-  logs.push(msg);
-  switch(type) {
-    case 'info':
-    default:
-      console.log(msg.reset);
-      break;
-    case 'error':
-      console.log(msg.red);
-      break;
-    case 'step':
-      console.log(msg.cyan);
-      break;
-    case 'action':
-      console.log(msg.yellow);
-      break;
-    case 'console':
-      console.log(msg.gray);
-      break;
-  }
-}
-
-/**
- * findElementByContent - Return the first ElementHandle that matches content.
- *
- * @param  {Page}     pageObj      Puppeteer page instance.
- * @param  {string}   selector     Query selector string.
- * @param  {string}   content        Content to match.
- * @param  {boolean}  visibleOnly  Whether to find visible elements only.
- * @return {ElementHandle}
- */
-async function getElementHandleByContent(pageObj, selector, content, visibleOnly) {
-  let handles = await pageObj.$$(selector);
-
-  if (content) {
-    for (let i=0; i<handles.length; i++) {
-      let innerText = await (await handles[i].getProperty('innerText')).jsonValue();
-      if (innerText && innerText.trim() && innerText === content) {
-        if (visibleOnly && !await handles[i].isIntersectingViewport()) continue;
-        return handles[i];
-      }
-    }
+    return stepContext;
   }
 
-  if (handles) return handles[0];
+  evaluteStyleSnapshot(step) {
+    let el = document.querySelector(step.selector);
+    let elements = [el];
+    let styles = '';
 
-  logger('info', `Can\'t find element with content \"${content}\"`)
-  return null;
+    // Iterate through all elements and their children.
+    while (elements.length > 0) {
+      el = elements.shift();
+
+      // When this element is simply a string, append to the styles.
+      if (typeof el === 'string') {
+        styles += el;
+        continue;
+      }
+
+      // Otherwise, add this element's tag name and its class names.
+      styles +=
+          el.tagName + '.' + el.className.split(' ').join('.');
+
+      // Put childrens into the elements array for next iteration.
+      if (el.childElementCount > 0) {
+        elements = ['[', ...Array.from(el.children), '],', ...elements];
+      }
+
+      // Add a comma for sibling elements.
+      if (elements[0] !== '[' && elements[0] !== ']') styles += ',';
+    }
+    return styles;
+  }
+
+  // Return the page or iframe object.
+  getPageObject(page, step) {
+    if (typeof step.iframe === 'number') {
+      this.logger('info', `    On iframe #${step.iframe}`);
+      return page.frames()[step.iframe];
+    } else if (typeof step.iframe === 'string') {
+      this.logger('info', `    On iframe id = ${step.iframe}`);
+      return page.frames().find(frame => frame.name() === step.iframe);
+    }
+    return page;
+  }
+
+  async outputToFile(filename, text) {
+      let filePath = path.resolve(filename);
+      await fse.outputFile(filePath, text);
+  }
+
+  async outputHtmlToFile(filename, content) {
+    // Output content
+    let html = beautify(content, {
+      indent_size: 2,
+      preserve_newlines: false,
+      content_unformatted: ['script', 'style'],
+    });
+    await this.outputToFile(filename, html);
+  }
+
+  escapeXml(input) {
+    return input.replace(/&/g, '&amp;')
+               .replace(/</g, '&lt;')
+               .replace(/>/g, '&gt;')
+               .replace(/"/g, '&quot;')
+               .replace(/'/g, '&apos;');
+  }
+
+  logger(type, msg) {
+    if (!msg) return;
+
+    this.logs.push(msg);
+    switch(type) {
+      case 'info':
+      default:
+        console.log(msg.reset);
+        break;
+      case 'error':
+        console.log(msg.red);
+        break;
+      case 'step':
+        console.log(msg.cyan);
+        break;
+      case 'action':
+        console.log(msg.yellow);
+        break;
+      case 'console':
+        console.log(msg.gray);
+        break;
+    }
+  }
 }
 
 module.exports = {
   ActionType: ActionType,
-  runTask: runTask,
+  PuppetMaster: PuppetMaster,
 };
