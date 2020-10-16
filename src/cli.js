@@ -1,11 +1,12 @@
 /* eslint no-unused-vars: "warn" */
 
+const puppeteer = require('puppeteer');
 const argv = require('minimist')(process.argv.slice(2));
 const path = require('path');
 const fse = require('fs-extra');
 const mkdirp = require('mkdirp');
 const rimraf = require('rimraf');
-const puppemaster = require('./core');
+const {PuppetMaster} = require('./core');
 const colors = require('colors');
 
 
@@ -22,6 +23,8 @@ Required:
 Options:
   --output=OUTPUT_PATH\tPath to output task results.
   --screenshot\t\tWhether to take screenshot for each step.
+  --headless\t\tWhether to run puppeteer in headless mode.
+  --chrome-args\t\tCustom Chrome arguments.
   --print\t\tPrint report outcome.
   --verbose\t\tDisplay process details.
 
@@ -50,8 +53,10 @@ Specify --help for available options.
 async function begin() {
   const params = argv['_'] || [];
   const screenshot = argv['screenshot'] || false;
+  const chromeArgs = (argv['chrome-args'] || '').split(',');
   const print = argv['print'] || false;
   const verbose = argv['verbose'] || false;
+  const debug = argv['debug'] || false;
   const help = argv['help'];
   const headless = argv['headless'];
   const taskFile = params[0];
@@ -76,6 +81,20 @@ async function begin() {
 
   try {
     console.log(`PuppetMaster begins.`.cyan);
+    if (verbose) {
+      console.log(`Launching browser with args:`);
+      console.log(chromeArgs);
+    }
+
+    let browser = await puppeteer.launch({
+      headless: argv['headless'] ? true : false,
+      args: chromeArgs,
+    });
+    let page = await browser.newPage();
+    let puppetmaster = new PuppetMaster(page, {
+      verbose: verbose,
+      debug: debug,
+    });
 
     // Create directory if it doesn't exist.
     await rimraf(`./${outputPath}/*`, () => {
@@ -87,20 +106,17 @@ async function begin() {
 
     console.log(`Loading task ${taskFile}`.cyan);
 
-    let task;
+    let taskFlow;
     try {
-      task = require(`../${scriptName}`);
+      taskFlow = require(`../${scriptName}`);
     } catch (e) {
       console.log(`Unable to load task script: ${taskFile}`.red);
       console.error(e);
       return;
     }
-
-    const result = await puppemaster.runTask(task, {
-      screenshot: screenshot,
-      outputPath: outputPath,
-      isHeadless: !!headless,
-    });
+    
+    // Run a single task flow.
+    const result = await puppetmaster.runFlow(taskFlow);
 
     const json = JSON.stringify(result, null, 4);
 
@@ -115,7 +131,7 @@ async function begin() {
 
   } catch (e) {
     console.log(`${e.name}: ${e.message}`.red);
-    if (verbose) console.trace(e);
+    if (debug || verbose) console.trace(e);
 
     console.log('Complete with errors.'.yellow);
     process.exit();

@@ -10,14 +10,13 @@
  * the License.
  */
 
-const puppeteer = require('puppeteer');
 const devices = require('puppeteer/DeviceDescriptors');
 const fse = require('fs-extra'); // v 5.0.0
 const path = require('path');
 const beautify = require('js-beautify').html;
 const colors = require('colors');
 const assert = require('assert');
-const NETWORK_CONFIG = require('../utils/network-config');
+const NETWORK_CONFIG = require('./network-config');
 const {
   JSDOM
 } = require("jsdom");
@@ -54,7 +53,9 @@ const ActionType = {
   ASSERT_CONTENT: 'assertContent',
   // Assert a style change for a specific component.
   ASSERT_STYLE_CHANGE: 'assertStyleChange',
-  // Take a snapshot of all classes of a given element.
+  // Start to measure how long a specific content is ready from the current timestamp. 
+  MEASURE_CONTENT_READY: 'measureContentAppear',
+  // Assert a style change for a specific component.
   STYLE_SNAPSHOT: 'styleSnapshot',
   // Take a screenshot of the current page.
   SCREENSHOT: 'screenshot',
@@ -70,6 +71,9 @@ class PuppetMaster {
     this.logs = [];
     this.config = config || {};
     this.page = page;
+    this.measures = {};
+    this.verbose = config.verbose;
+    this.debug = config.debug;
   }
 
   async runFlow(flow, options) {
@@ -78,27 +82,26 @@ class PuppetMaster {
 
     let error = null;
     let browser, page, content;
-    let outputPath = options.outputPath || './';
-    let device = options.device || 'Pixel 2'
+    let outputPath = flow.outputPath || './';
+    let device = flow.device || 'Pixel 2'
     let waitOptions = {
-      waitUntil: [options.networkidle || 'networkidle0', 'load'],
+      waitUntil: [flow.networkidle || 'networkidle0', 'load'],
     };
     let flowResult = {
       steps: [],
     };
 
     // Default sleep between steps: 1 second.
-    let sleepAfterEachStep = options.sleepAfterEachStep || 1000;
+    let sleepAfterEachStep = flow.sleepAfterEachStep || 0;
     let logs = [];
 
     try {
       assert(flow.steps, 'Missing steps in flow.');
       this.logger('info', `Use device ${device}`);
-      // page = await this.browser.newPage();
 
       await this.page.emulate(devices[device]);
 
-      if (options.showConsoleOutput) {
+      if (flow.showConsoleOutput) {
         this.page.on('console',
             msg => this.logger('console', `\tPage console output: ${msg.text()}`));
       }
@@ -114,19 +117,19 @@ class PuppetMaster {
       // Set Network speed.
       // Connect to Chrome DevTools and set throttling property.
       const devTools = await this.page.target().createCDPSession();
-      if (options.networkConfig) {
+      if (flow.networkConfig) {
         await devTools.send(
           'Network.emulateNetworkConditions',
-          NETWORK_CONFIG[options.networkConfig]);
+          NETWORK_CONFIG[flow.networkConfig]);
       }
 
-      if (options.disableCache) {
+      if (flow.disableCache) {
         await this.page.setCacheEnabled(false);
       }
 
       // Override user agent.
-      if (options.userAgent) {
-        this.page.setUserAgent(options.userAgent);
+      if (flow.userAgent) {
+        this.page.setUserAgent(flow.userAgent);
       }
 
       this.page.setDefaultNavigationTimeout(60000);
@@ -136,7 +139,7 @@ class PuppetMaster {
         await this.page.addScriptTag({path: __dirname + '/script-querySelectorDeep.js'});
       });
 
-      if (options.tracing) {
+      if (flow.tracing) {
         this.logger('info', 'Start tracing.');
         await this.page.tracing.start({
           screenshots: true,
@@ -147,13 +150,14 @@ class PuppetMaster {
       flowResult.startTime = Date.now();
 
       // Cross-step variables:
-      let stepContext = {};
+      let context = {};
 
       // Execute steps.
       for (var i = 0; i < flow.steps.length; i++) {
         let step = flow.steps[i];
         let stepLog = `Step ${i+1}`;
 
+        step.index = i + 1;
         if (step.log) stepLog += `: ${step.log}`;
         this.logger('step', stepLog);
 
@@ -171,8 +175,15 @@ class PuppetMaster {
 
         this.logger('step', `    action: ${step.actionType}`);
 
-        // Execute action and collect step-wide context.
-        await this.executeAction(pageObj, step, stepContext);
+        try {
+          // Execute action and collect step-wide context.
+          await this.executeAction(pageObj, step, context);
+          step.status = Status.SUCCESS;
+        } catch (e) {
+          step.status = Status.ERROR;
+          step.error = e;
+        this.logger('error', `    action failed: ${e.message}`);
+        }
 
         if (step.sleepAfter) await this.page.waitFor(step.sleepAfter);
         await this.page.waitFor(sleepAfterEachStep);
@@ -180,11 +191,13 @@ class PuppetMaster {
         flowResult.steps.push({
           log: stepLog,
           actionType: step.actionType,
-          timelapse: Date.now() - flowResult.startTime,
-          stepContext: stepContext,
+          status: step.status,
+          timelapseMs: Date.now() - flowResult.startTime,
         });
 
-        this.logger('info', `\t${step.log || step.actionType}: ${message}`);
+        flowResult.measures = this.measures;
+
+        this.logger('info', `\t${step.log || step.actionType}: ${context.message || message}`);
       }
 
       await this.page.waitFor(sleepAfterEachStep);
@@ -253,28 +266,32 @@ class PuppetMaster {
     }
   }
 
-  async executeAction(pageObj, step, stepContext) {
+  async executeAction(pageObj, step, context) {
     switch (step.actionType) {
       case ActionType.URL:
         await pageObj.goto(step.url, {waitUntil: 'domcontentloaded'});
-        stepContext.message = 'Opened URL ' + step.url;
+        context.message = 'Opened URL ' + step.url;
         break;
 
       case ActionType.SLEEP:
         await pageObj.waitFor(parseInt(step.value));
-        stepContext.message = `Waited for ${step.value} ms`;
+        context.message = `Waited for ${step.value} ms`;
         break;
 
       case ActionType.WAIT_FOR_ELEMENT:
-        await pageObj.waitFor(step.selector);
-        stepContext.message = `Waited for element ${step.selector}`;
+        {
+          let startTimestamp = Date.now();
+          await pageObj.waitFor(step.selector);
+          let timelapseMs = Date.now() - startTimestamp;
+          context.message = `Waited for element ${step.selector}: ${timelapseMs} ms`;  
+        }
         break;
 
       case ActionType.TYPE_THEN_SUBMIT:
         await pageObj.waitFor(step.selector);
         await pageObj.type(step.selector, step.inputText);
         await pageObj.keyboard.press('Enter');
-        stepContext.message = `Typed in element ${step.selector} with ${step.inputText}`;
+        context.message = `Typed in element ${step.selector} with ${step.inputText}`;
         break;
 
       case ActionType.CLICK:
@@ -283,20 +300,20 @@ class PuppetMaster {
           if (!elHandle) throw new Error(`Unable to find element: \"${step.selector}\"`);
 
           elHandle.click();
-          stepContext.message = `Clicked element: ${step.selector}`;
+          context.message = `Clicked element: ${step.selector}`;
         }
         break;
 
       case ActionType.TAP:
         {
           await pageObj.tap(step.selector);
-          stepContext.message = `Tapped element: ${step.selector}`;
+          context.message = `Tapped element: ${step.selector}`;
         }
         break;
 
       case ActionType.SELECT:
         await pageObj.select(step.selector, step.value);
-        stepContext.message = `Selected ${value} for element: ${step.selector}`;
+        context.message = `Selected ${value} for element: ${step.selector}`;
         break;
 
       case ActionType.SCROLL_TO:
@@ -306,7 +323,7 @@ class PuppetMaster {
             if (el) el.scrollIntoView();
             return true;
           }, step);
-          stepContext.message = `Scrolled to element: ${step.selector}`;
+          context.message = `Scrolled to element: ${step.selector}`;
         }
         break;
 
@@ -314,7 +331,7 @@ class PuppetMaster {
         {
           let pageTitle = await pageObj.title();
           if (!step.value && !step.valueRegex) {
-            throw new Error('Missing match or matchRegex attributes in ASSERT_PAGE_TITLE step.');
+            throw new Error('Missing value or valueRegex attributes in ASSERT_PAGE_TITLE step.');
           }
           if (step.value && step.value !== pageTitle) {
             throw new Error(`Page title "${pageTitle}" doesn't match ${step.value}`);
@@ -322,7 +339,7 @@ class PuppetMaster {
           if (step.valueRegex && !step.valueRegex.match(pageTitle)) {
             throw new Error(`Page title "${pageTitle}" doesn't match ${step.valueRegex}`);
           }
-          stepContext.message = `Page title matched: "${pageTitle}"`;
+          context.message = `Page title matched: "${pageTitle}"`;
         }
         break;
 
@@ -330,7 +347,7 @@ class PuppetMaster {
         {
           let innerText = await pageObj.$eval(step.selector, el => el.innerText);
           if (!step.value && !step.valueRegex) {
-            throw new Error('Missing match or matchRegex attributes in ASSERT_PAGE_TITLE step.');
+            throw new Error('Missing value or valueRegex attributes in ASSERT_PAGE_TITLE step.');
           }
           if (step.value && step.value !== innerText) {
             throw new Error(`Expect element ${step.selector} to match ` +
@@ -340,7 +357,7 @@ class PuppetMaster {
             throw new Error(`Expect element ${step.selector} to match ` +
               `title as "${step.valueRegex}", but got "${innerText}".`);
           }
-          stepContext.message = `Matched text for element ${step.selector}`;
+          context.message = `Matched text for element ${step.selector}`;
         }
         break;
 
@@ -359,7 +376,7 @@ class PuppetMaster {
           if (bodyContent.indexOf(content) < 0 && bodyContent.indexOf(this.escapeXml(content))) {
             throw new Error(`Didn\'t see text \"${content}\"`);
           }
-          stepContext.message = `Saw text content \"${content}\" on the page.`;
+          context.message = `Saw text content \"${content}\" on the page.`;
         }
         break;
 
@@ -369,7 +386,7 @@ class PuppetMaster {
               'Missing selector attribute in STYLE_SNAPSHOT step.');
           // Sample style snapshot:
           // form.a[div.b[input.c,input.d],div.e]
-          stepContext.styleSnapshot = await pageObj.evaluate(
+          context.styleSnapshot = await pageObj.evaluate(
               this.evaluteStyleSnapshot, step);
         }
         break;
@@ -379,7 +396,7 @@ class PuppetMaster {
           assert(step.selector,
               'Missing selector attribute in STYLE_SNAPSHOT step.');
           let newStyleSnapshot = await pageObj.evaluate(this.evaluteStyleSnapshot, step);
-          if (newStyleSnapshot === stepContext.styleSnapshot) {
+          if (newStyleSnapshot === context.styleSnapshot) {
             throw new Error(`No styles change detected`);
           }
         }
@@ -389,14 +406,31 @@ class PuppetMaster {
         await page.screenshot({
           path: `${outputPath}/${step.filename}`
         });
-        stepContext.message = `Screenshot saved to ${step.filename}`;
+        context.message = `Screenshot saved to ${step.filename}`;
         break;
 
       case ActionType.WRITE_TO_FILE:
         content = await pageObj.$eval(step.selector, el => el.outerHTML);
         await this.outputHtmlToFile(
           `${outputPath}/flow-${flow.flowIndex}/${step.filename}`, content);
-        stepContext.message = `write ${step.selector} to ${step.filename}`;
+        context.message = `write ${step.selector} to ${step.filename}`;
+        break;
+
+      case ActionType.MEASURE_CONTENT_READY:
+        {
+          let name = step.name || `step-${step.index}`;
+          this.measures[name] = {
+            selector: step.selector,
+            startTimestamp: Date.now(),
+          };
+  
+          pageObj.waitForSelector(step.selector).then(() => {
+            let endTimestamp = Date.now();
+            let startTimestamp = this.measures[name].startTimestamp;
+            this.measures[name].endTimestamp = endTimestamp;
+            this.measures[name].timelapseMs = endTimestamp - startTimestamp;
+          })  
+        }
         break;
 
       case ActionType.CUSTOM_FUNC:
@@ -406,10 +440,13 @@ class PuppetMaster {
         break;
 
       default:
+        if (this.debug) {
+          console.log(step);
+        }
         throw new Error(`action ${step.actionType} is not supported.`);
         break;
     }
-    return stepContext;
+    return context;
   }
 
   evaluteStyleSnapshot(step) {

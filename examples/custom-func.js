@@ -1,7 +1,7 @@
 const PuppetMaster = require('../src/core');
 const ActionType = PuppetMaster.ActionType;
 
-let task = {
+let taskFlow = {
   visits: 1, // Total number of simulated visits.
   flows: [{
     name: 'Flow to a PDP at jonchen-shop.firebaseapp.com',
@@ -28,4 +28,4 @@ let task = {
   }],
 }
 
-module.exports = task;
+module.exports = taskFlow;

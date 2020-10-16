@@ -5,7 +5,37 @@
 PuppetMaster is a task runner library based on Puppeteer with simplified list of
 steps. Similar to an integration test, mainly focus on web frontend testing.
 
-## Getting Started
+## Quick start
+
+Clone this repo and init npm/yarn:
+```
+git clone https://github.com/jonchenn/puppetmaster.git
+cd puppetmaster
+yarn install
+```
+
+To run a single task file: 
+
+```
+./puppetmaster examples/sample.js
+```
+
+To run tasks with specific output folder:
+```
+./puppetmaster examples/sample.js --output=tmp/output
+```
+
+To run tasks with specific Chrome arguments:
+```
+./puppetmaster examples/sample.js --output=tmp/output --chrome-args=--disable-web-security
+```
+
+To run in headless mode
+```
+./puppetmaster examples/sample.js --output=tmp/output --headless
+```
+
+## Running PuppetMaster as a library
 
 To run a flow with PuppetMaster, firstly you will need a Puppeteer page object:
 
@@ -57,6 +87,19 @@ flowResult: {
     log: ...,
   }]
 }
+```
+
+### Run tasks with CLI
+
+To run a single task file: 
+
+```
+./puppetmaster examples/sample-script.js
+```
+
+To run tasks with specific output folder:
+```
+./puppetmaster examples/sample-script.js--output=tmp/output
 ```
 
 ## Task flow and steps
