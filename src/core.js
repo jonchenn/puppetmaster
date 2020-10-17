@@ -23,6 +23,7 @@ const {
 
 const Status = {
   SUCCESS: 'success',
+  PENDING: 'pending',
   ERROR: 'error',
 };
 
@@ -37,6 +38,8 @@ const ActionType = {
   TYPE_THEN_SUBMIT: 'typeThenSubmit',
   // Click a specific element.
   CLICK: 'click',
+  // Click a specific element.
+  WAIT_AND_CLICK: 'waitAndClick',
   // Click a specific element.
   TAP: 'tap',
   // Select a specific element with a value.
@@ -53,8 +56,10 @@ const ActionType = {
   ASSERT_CONTENT: 'assertContent',
   // Assert a style change for a specific component.
   ASSERT_STYLE_CHANGE: 'assertStyleChange',
-  // Start to measure how long a specific content is ready from the current timestamp. 
-  MEASURE_CONTENT_READY: 'measureContentAppear',
+  // Start to measure how long a specific element is ready from the current timestamp. 
+  MEASURE_ELEMENT_READY: 'measureElementReady',
+  // Start to measure how long a specific img is ready from the current timestamp. 
+  MEASURE_IMAGE_READY: 'measureImageReady',
   // Assert a style change for a specific component.
   STYLE_SNAPSHOT: 'styleSnapshot',
   // Take a screenshot of the current page.
@@ -133,6 +138,7 @@ class PuppetMaster {
       }
 
       this.page.setDefaultNavigationTimeout(60000);
+      this.page.setDefaultTimeout(flow.defaultTimeout || 60000);
 
       // Extend querySelectorDeep to Element and Document.
       this.page.once('load', async () => {
@@ -188,17 +194,23 @@ class PuppetMaster {
         if (step.sleepAfter) await this.page.waitFor(step.sleepAfter);
         await this.page.waitFor(sleepAfterEachStep);
 
-        flowResult.steps.push({
+        let stepOutput = {
           log: stepLog,
           actionType: step.actionType,
           status: step.status,
           timelapseMs: Date.now() - flowResult.startTime,
-        });
+        };
 
-        flowResult.measures = this.measures;
+        if (flow.puppeteerMetrics) {
+          stepOutput.metrics = await this.page.metrics();
+        }
+
+        flowResult.steps.push(stepOutput);
 
         this.logger('info', `\t${step.log || step.actionType}: ${context.message || message}`);
       }
+
+      flowResult.measures = this.measures;
 
       await this.page.waitFor(sleepAfterEachStep);
 
@@ -281,7 +293,9 @@ class PuppetMaster {
       case ActionType.WAIT_FOR_ELEMENT:
         {
           let startTimestamp = Date.now();
-          await pageObj.waitFor(step.selector);
+          await pageObj.waitForSelector(step.selector, {
+            timeout: 60000,
+          });
           let timelapseMs = Date.now() - startTimestamp;
           context.message = `Waited for element ${step.selector}: ${timelapseMs} ms`;  
         }
@@ -304,6 +318,17 @@ class PuppetMaster {
         }
         break;
 
+      case ActionType.WAIT_AND_CLICK:
+        {
+          let startTimestamp = Date.now();
+          await pageObj.waitFor(step.selector);
+          let elHandle = await pageObj.$(step.selector);
+          if (!elHandle) throw new Error(`Unable to find element: \"${step.selector}\"`);
+          elHandle.click();
+          let timelapseMs = Date.now() - startTimestamp;
+          context.message = `Waited for element ${step.selector}: ${timelapseMs} ms`;  
+        }
+      
       case ActionType.TAP:
         {
           await pageObj.tap(step.selector);
@@ -318,9 +343,13 @@ class PuppetMaster {
 
       case ActionType.SCROLL_TO:
         {
+          if (step.waitForElement) {
+            await pageObj.waitFor(step.selector);
+          }
           await pageObj.evaluate((step) => {
             let el = document.querySelector(step.selector);
-            if (el) el.scrollIntoView();
+            if (!el) throw new Error(`Unable to find element: \"${step.selector}\"`);
+            el.scrollIntoView();
             return true;
           }, step);
           context.message = `Scrolled to element: ${step.selector}`;
@@ -416,23 +445,25 @@ class PuppetMaster {
         context.message = `write ${step.selector} to ${step.filename}`;
         break;
 
-      case ActionType.MEASURE_CONTENT_READY:
+      case ActionType.MEASURE_ELEMENT_READY:
         {
           let name = step.name || `step-${step.index}`;
           this.measures[name] = {
             selector: step.selector,
             startTimestamp: Date.now(),
+            status: Status.PENDING,
           };
   
           pageObj.waitForSelector(step.selector).then(() => {
             let endTimestamp = Date.now();
             let startTimestamp = this.measures[name].startTimestamp;
             this.measures[name].endTimestamp = endTimestamp;
+            this.measures[name].status = Status.SUCCESS;
             this.measures[name].timelapseMs = endTimestamp - startTimestamp;
           })  
         }
         break;
-
+          
       case ActionType.CUSTOM_FUNC:
         if (step.customFunc) {
           await step.customFunc(step, pageObj);
