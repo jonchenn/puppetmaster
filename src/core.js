@@ -58,8 +58,8 @@ const ActionType = {
   ASSERT_STYLE_CHANGE: 'assertStyleChange',
   // Start to measure how long a specific element is ready from the current timestamp. 
   MEASURE_ELEMENT_READY: 'measureElementReady',
-  // Start to measure how long a specific img is ready from the current timestamp. 
-  MEASURE_IMAGE_READY: 'measureImageReady',
+  // Start to measure how long a specific resource is fetched and ready from the current timestamp.
+  MEASURE_RESOURCE_READY: 'measureResourceReady',
   // Assert a style change for a specific component.
   STYLE_SNAPSHOT: 'styleSnapshot',
   // Take a screenshot of the current page.
@@ -281,6 +281,7 @@ class PuppetMaster {
   async executeAction(pageObj, step, context) {
     switch (step.actionType) {
       case ActionType.URL:
+        assert(step.url, 'Missing url attribute in URL step.');
         await pageObj.goto(step.url, {waitUntil: 'domcontentloaded'});
         context.message = 'Opened URL ' + step.url;
         break;
@@ -463,7 +464,28 @@ class PuppetMaster {
           })  
         }
         break;
-          
+
+      case ActionType.MEASURE_RESOURCE_READY:
+        {
+          assert(step.url, 'Missing url attribute in URL step.');
+
+          let name = step.name || `step-${step.index}`;
+          this.measures[name] = {
+            url: step.url,
+            startTimestamp: Date.now(),
+            status: Status.PENDING,
+          };
+  
+          pageObj.waitForResponse(step.url).then(() => {
+            let endTimestamp = Date.now();
+            let startTimestamp = this.measures[name].startTimestamp;
+            this.measures[name].endTimestamp = endTimestamp;
+            this.measures[name].status = Status.SUCCESS;
+            this.measures[name].timelapseMs = endTimestamp - startTimestamp;
+          })  
+        }
+        break;
+        
       case ActionType.CUSTOM_FUNC:
         if (step.customFunc) {
           await step.customFunc(step, pageObj);
